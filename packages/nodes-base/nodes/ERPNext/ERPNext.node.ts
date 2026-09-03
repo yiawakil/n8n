@@ -23,7 +23,7 @@ export class ERPNext implements INodeType {
 		group: ['output'],
 		version: 1,
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
-		description: 'Consume ERPNext API',
+		description: 'Consume ERPNext and Frappe API',
 		defaults: {
 			name: 'ERPNext',
 		},
@@ -47,6 +47,14 @@ export class ERPNext implements INodeType {
 						name: 'Document',
 						value: 'document',
 					},
+					{
+						name: 'Custom Method',
+						value: 'customMethod',
+					},
+					{
+						name: 'File',
+						value: 'file',
+					},
 				],
 				default: 'document',
 			},
@@ -58,227 +66,389 @@ export class ERPNext implements INodeType {
 	methods = {
 		loadOptions: {
 			async getDocTypes(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const data = await erpNextApiRequestAllItems.call(
-					this,
-					'data',
-					'GET',
-					'/api/resource/DocType',
-					{},
-				);
-				const docTypes = data.map(({ name }: { name: string }) => {
-					return { name, value: encodeURI(name) };
-				});
+				try {
+					const data = await erpNextApiRequestAllItems.call(
+						this,
+						'data',
+						'GET',
+						'/api/resource/DocType',
+						{},
+					);
+					const docTypes = data.map(({ name }: { name: string }) => {
+						return { name, value: name };
+					});
 
-				return processNames(docTypes);
+					return processNames(docTypes);
+				} catch {
+					return [];
+				}
 			},
 			async getDocFilters(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const docType = this.getCurrentNodeParameter('docType') as string;
-				const { data } = await erpNextApiRequest.call(
+				const docFields = (await (this.methods.loadOptions.getDocFields.call(
 					this,
-					'GET',
-					`/api/resource/DocType/${docType}`,
-					{},
-				);
-
-				const docFields = data.fields.map(
-					({ label, fieldname }: { label: string; fieldname: string }) => {
-						return { name: label, value: fieldname };
-					},
-				);
-
-				docFields.unshift({ name: '*', value: '*' });
-
-				return processNames(docFields);
+				) as Promise<INodePropertyOptions[]>)) || [];
+				const cloned = [...docFields];
+				cloned.unshift({ name: '*', value: '*' });
+				return cloned;
 			},
 			async getDocFields(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const docType = this.getCurrentNodeParameter('docType') as string;
-				const { data } = await erpNextApiRequest.call(
-					this,
-					'GET',
-					`/api/resource/DocType/${docType}`,
-					{},
-				);
+				if (!docType) {
+					return [];
+				}
 
-				const docFields = data.fields.map(
-					({ label, fieldname }: { label: string; fieldname: string }) => {
-						return { name: label, value: fieldname };
-					},
-				);
+				// Try Frappe's desk form endpoint first (accessible without full System Manager role)
+				try {
+					const response = await erpNextApiRequest.call(
+						this,
+						'GET',
+						`/api/method/frappe.desk.form.load.getdoctype?doctype=${encodeURIComponent(docType)}`,
+						{},
+					);
+					const docs = response?.docs || response?.message?.docs;
+					if (Array.isArray(docs) && docs[0]?.fields) {
+						const docFields = docs[0].fields
+							.filter((f: { fieldname?: string; label?: string }) => f.fieldname && f.label)
+							.map(({ label, fieldname }: { label: string; fieldname: string }) => ({
+								name: label,
+								value: fieldname,
+							}));
+						return processNames(docFields);
+					}
+				} catch {
+					// Fallback to /api/resource/DocType/{docType}
+				}
 
-				return processNames(docFields);
+				try {
+					const { data } = await erpNextApiRequest.call(
+						this,
+						'GET',
+						`/api/resource/DocType/${encodeURIComponent(docType)}`,
+						{},
+					);
+
+					if (data?.fields && Array.isArray(data.fields)) {
+						const docFields = data.fields
+							.filter((f: { fieldname?: string; label?: string }) => f.fieldname && f.label)
+							.map(({ label, fieldname }: { label: string; fieldname: string }) => ({
+								name: label,
+								value: fieldname,
+							}));
+
+						return processNames(docFields);
+					}
+				} catch {
+					// Return empty if schema cannot be fetched
+				}
+
+				return [];
 			},
 		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
-
 		const returnData: INodeExecutionData[] = [];
-		let responseData;
 
-		const body: IDataObject = {};
-		const qs: IDataObject = {};
-
-		const resource = this.getNodeParameter('resource', 0);
-		const operation = this.getNodeParameter('operation', 0);
+		const resource = this.getNodeParameter('resource', 0) as string;
+		const operation = this.getNodeParameter('operation', 0) as string;
 
 		for (let i = 0; i < items.length; i++) {
-			// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/Resources/post_api_resource_Webhook
-			// https://frappeframework.com/docs/user/en/guides/integration/rest_api/manipulating_documents
+			let responseData: any;
+			const body: IDataObject = {};
+			const qs: IDataObject = {};
 
-			if (resource === 'document') {
-				// *********************************************************************
-				//                             document
-				// *********************************************************************
+			try {
+				if (resource === 'document') {
+					if (operation === 'get') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const documentName = this.getNodeParameter('documentName', i) as string;
 
-				if (operation === 'get') {
-					// ----------------------------------
-					//          document: get
-					// ----------------------------------
+						responseData = await erpNextApiRequest.call(
+							this,
+							'GET',
+							`/api/resource/${encodeURIComponent(docType)}/${encodeURIComponent(documentName)}`,
+						);
+						responseData = responseData.data;
+					} else if (operation === 'getAll') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const endpoint = `/api/resource/${encodeURIComponent(docType)}`;
 
-					// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/General/get_api_resource__DocType___DocumentName_
+						const options = (this.getNodeParameter('options', i, {}) as {
+							fields?: string[];
+							orderBy?: string;
+							filters?: {
+								customProperty?: Array<{ field: string; operator: string; value: string }>;
+							};
+							filtersJson?: string;
+						}) || {};
 
-					const docType = this.getNodeParameter('docType', i) as string;
-					const documentName = this.getNodeParameter('documentName', i) as string;
+						if (options.fields && options.fields.length > 0) {
+							if (options.fields.includes('*')) {
+								qs.fields = JSON.stringify(['*']);
+							} else {
+								qs.fields = JSON.stringify(options.fields);
+							}
+						}
 
-					responseData = await erpNextApiRequest.call(
-						this,
-						'GET',
-						`/api/resource/${docType}/${documentName}`,
-					);
-					responseData = responseData.data;
-				}
+						if (options.orderBy) {
+							qs.order_by = options.orderBy;
+						}
 
-				if (operation === 'getAll') {
-					// ----------------------------------
-					//         document: getAll
-					// ----------------------------------
+						if (options.filtersJson) {
+							try {
+								const parsed = JSON.parse(options.filtersJson);
+								qs.filters = JSON.stringify(parsed);
+							} catch {
+								throw new NodeOperationError(
+									this.getNode(),
+									'Raw JSON Filters must be a valid JSON array or object.',
+									{ itemIndex: i },
+								);
+							}
+						} else if (options.filters?.customProperty && options.filters.customProperty.length > 0) {
+							qs.filters = JSON.stringify(
+								options.filters.customProperty.map((filter) => {
+									return [docType, filter.field, toSQL(filter.operator), filter.value];
+								}),
+							);
+						}
 
-					// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/General/get_api_resource__DocType_
+						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
 
-					const docType = this.getNodeParameter('docType', i) as string;
-					const endpoint = `/api/resource/${docType}`;
-
-					const { fields, filters } = this.getNodeParameter('options', i) as {
-						fields: string[];
-						filters: {
-							customProperty: Array<{ field: string; operator: string; value: string }>;
-						};
-					};
-
-					// fields=["test", "example", "hi"]
-					if (fields) {
-						if (fields.includes('*')) {
-							qs.fields = JSON.stringify(['*']);
+						if (!returnAll) {
+							const limit = this.getNodeParameter('limit', i, 10) as number;
+							qs.limit_page_length = limit;
+							qs.limit_start = 0;
+							responseData = await erpNextApiRequest.call(this, 'GET', endpoint, {}, qs);
+							responseData = responseData.data;
 						} else {
-							qs.fields = JSON.stringify(fields);
+							responseData = await erpNextApiRequestAllItems.call(
+								this,
+								'data',
+								'GET',
+								endpoint,
+								{},
+								qs,
+							);
+						}
+					} else if (operation === 'create') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const dataMode = this.getNodeParameter('dataMode', i, 'properties') as string;
+
+						let payload: IDataObject = {};
+
+						if (dataMode === 'json') {
+							const documentJson = this.getNodeParameter('documentJson', i) as string;
+							try {
+								payload = typeof documentJson === 'object' ? documentJson : JSON.parse(documentJson);
+							} catch {
+								throw new NodeOperationError(
+									this.getNode(),
+									'Document JSON must be a valid JSON object.',
+									{ itemIndex: i },
+								);
+							}
+						} else {
+							const properties = this.getNodeParameter('properties', i, {}) as DocumentProperties;
+							if (!properties?.customProperty || properties.customProperty.length === 0) {
+								throw new NodeOperationError(
+									this.getNode(),
+									'Please enter at least one property for the document to create, or select JSON mode.',
+									{ itemIndex: i },
+								);
+							}
+							properties.customProperty.forEach((property) => {
+								payload[property.field] = property.value;
+							});
+						}
+
+						responseData = await erpNextApiRequest.call(
+							this,
+							'POST',
+							`/api/resource/${encodeURIComponent(docType)}`,
+							payload,
+						);
+						responseData = responseData.data;
+					} else if (operation === 'update') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const documentName = this.getNodeParameter('documentName', i) as string;
+						const dataMode = this.getNodeParameter('dataMode', i, 'properties') as string;
+
+						let payload: IDataObject = {};
+
+						if (dataMode === 'json') {
+							const documentJson = this.getNodeParameter('documentJson', i) as string;
+							try {
+								payload = typeof documentJson === 'object' ? documentJson : JSON.parse(documentJson);
+							} catch {
+								throw new NodeOperationError(
+									this.getNode(),
+									'Document JSON must be a valid JSON object.',
+									{ itemIndex: i },
+								);
+							}
+						} else {
+							const properties = this.getNodeParameter('properties', i, {}) as DocumentProperties;
+							if (!properties?.customProperty || properties.customProperty.length === 0) {
+								throw new NodeOperationError(
+									this.getNode(),
+									'Please enter at least one property for the document to update, or select JSON mode.',
+									{ itemIndex: i },
+								);
+							}
+							properties.customProperty.forEach((property) => {
+								payload[property.field] = property.value;
+							});
+						}
+
+						responseData = await erpNextApiRequest.call(
+							this,
+							'PUT',
+							`/api/resource/${encodeURIComponent(docType)}/${encodeURIComponent(documentName)}`,
+							payload,
+						);
+						responseData = responseData.data;
+					} else if (operation === 'delete') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const documentName = this.getNodeParameter('documentName', i) as string;
+
+						await erpNextApiRequest.call(
+							this,
+							'DELETE',
+							`/api/resource/${encodeURIComponent(docType)}/${encodeURIComponent(documentName)}`,
+						);
+						responseData = { success: true, message: `Document '${documentName}' deleted successfully.` };
+					} else if (operation === 'submit') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const documentName = this.getNodeParameter('documentName', i) as string;
+
+						responseData = await erpNextApiRequest.call(
+							this,
+							'PUT',
+							`/api/resource/${encodeURIComponent(docType)}/${encodeURIComponent(documentName)}`,
+							{ docstatus: 1 },
+						);
+						responseData = responseData.data;
+					} else if (operation === 'cancel') {
+						const docType = this.getNodeParameter('docType', i) as string;
+						const documentName = this.getNodeParameter('documentName', i) as string;
+
+						responseData = await erpNextApiRequest.call(
+							this,
+							'PUT',
+							`/api/resource/${encodeURIComponent(docType)}/${encodeURIComponent(documentName)}`,
+							{ docstatus: 2 },
+						);
+						responseData = responseData.data;
+					}
+				} else if (resource === 'customMethod') {
+					if (operation === 'execute') {
+						const methodName = (this.getNodeParameter('methodName', i) as string).trim();
+						const httpMethod = this.getNodeParameter('httpMethod', i, 'POST') as 'GET' | 'POST';
+						const parameterMode = this.getNodeParameter('parameterMode', i, 'properties') as string;
+
+						let methodParams: IDataObject = {};
+
+						if (parameterMode === 'json') {
+							const parametersJson = this.getNodeParameter('parametersJson', i, '') as string;
+							if (parametersJson) {
+								try {
+									methodParams = typeof parametersJson === 'object' ? parametersJson : JSON.parse(parametersJson);
+								} catch {
+									throw new NodeOperationError(
+										this.getNode(),
+										'Parameters JSON must be a valid JSON object.',
+										{ itemIndex: i },
+									);
+								}
+							}
+						} else {
+							const params = this.getNodeParameter('parameters', i, {}) as {
+								customProperty?: Array<{ field: string; value: string }>;
+							};
+							if (params?.customProperty) {
+								params.customProperty.forEach((prop) => {
+									methodParams[prop.field] = prop.value;
+								});
+							}
+						}
+
+						const endpoint = `/api/method/${methodName}`;
+						if (httpMethod === 'GET') {
+							responseData = await erpNextApiRequest.call(this, 'GET', endpoint, {}, methodParams);
+						} else {
+							responseData = await erpNextApiRequest.call(this, 'POST', endpoint, methodParams);
+						}
+
+						if (responseData && responseData.message !== undefined) {
+							if (
+								typeof responseData.message === 'object' &&
+								responseData.message !== null &&
+								!Array.isArray(responseData.message)
+							) {
+								responseData = responseData.message;
+							} else {
+								responseData = { result: responseData.message };
+							}
 						}
 					}
-					// filters=[["Person","first_name","=","Jane"]]
-					// TODO: filters not working
-					if (filters) {
-						qs.filters = JSON.stringify(
-							filters.customProperty.map((filter) => {
-								return [docType, filter.field, toSQL(filter.operator), filter.value];
-							}),
-						);
-					}
+				} else if (resource === 'file') {
+					if (operation === 'upload') {
+						const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i, 'data') as string;
+						const binaryData = this.helpers.assertBinaryData(i, binaryPropertyName);
+						const fileBufferData = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
 
-					const returnAll = this.getNodeParameter('returnAll', i);
+						const attachToDocument = this.getNodeParameter('attachToDocument', i, false) as boolean;
+						const fileOptions = this.getNodeParameter('fileOptions', i, {}) as {
+							fileName?: string;
+							folder?: string;
+							isPrivate?: boolean;
+						};
 
-					if (!returnAll) {
-						const limit = this.getNodeParameter('limit', i);
-						qs.limit_page_length = limit;
-						qs.limit_start = 0;
-						responseData = await erpNextApiRequest.call(this, 'GET', endpoint, {}, qs);
-						responseData = responseData.data;
-					} else {
-						responseData = await erpNextApiRequestAllItems.call(
+						const formData: IDataObject = {
+							file: {
+								value: fileBufferData,
+								options: {
+									contentType: binaryData.mimeType,
+									filename: fileOptions.fileName || binaryData.fileName || 'file',
+								},
+							},
+							is_private: fileOptions.isPrivate !== false ? 1 : 0,
+							folder: fileOptions.folder || 'Home',
+						};
+
+						if (attachToDocument) {
+							const docType = this.getNodeParameter('docType', i) as string;
+							const documentName = this.getNodeParameter('documentName', i) as string;
+							formData.doctype = docType;
+							formData.docname = documentName;
+						}
+
+						const uploadResponse = await erpNextApiRequest.call(
 							this,
-							'data',
-							'GET',
-							endpoint,
+							'POST',
+							'/api/method/upload_file',
 							{},
-							qs,
+							{},
+							undefined,
+							{
+								headers: {
+									Accept: 'application/json',
+								},
+								formData,
+							},
 						);
+
+						responseData = uploadResponse?.message || uploadResponse?.data || uploadResponse;
 					}
-				} else if (operation === 'create') {
-					// ----------------------------------
-					//         document: create
-					// ----------------------------------
-
-					// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/General/post_api_resource__DocType_
-
-					const properties = this.getNodeParameter('properties', i) as DocumentProperties;
-
-					if (!properties.customProperty.length) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Please enter at least one property for the document to create.',
-							{ itemIndex: i },
-						);
-					}
-
-					properties.customProperty.forEach((property) => {
-						body[property.field] = property.value;
-					});
-
-					const docType = this.getNodeParameter('docType', i) as string;
-
-					responseData = await erpNextApiRequest.call(
-						this,
-						'POST',
-						`/api/resource/${docType}`,
-						body,
-					);
-					responseData = responseData.data;
-				} else if (operation === 'delete') {
-					// ----------------------------------
-					//         document: delete
-					// ----------------------------------
-
-					// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/General/delete_api_resource__DocType___DocumentName_
-
-					const docType = this.getNodeParameter('docType', i) as string;
-					const documentName = this.getNodeParameter('documentName', i) as string;
-
-					responseData = await erpNextApiRequest.call(
-						this,
-						'DELETE',
-						`/api/resource/${docType}/${documentName}`,
-					);
-				} else if (operation === 'update') {
-					// ----------------------------------
-					//         document: update
-					// ----------------------------------
-
-					// https://app.swaggerhub.com/apis-docs/alyf.de/ERPNext/11#/General/put_api_resource__DocType___DocumentName_
-
-					const properties = this.getNodeParameter('properties', i) as DocumentProperties;
-
-					if (!properties.customProperty.length) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Please enter at least one property for the document to update.',
-							{ itemIndex: i },
-						);
-					}
-
-					properties.customProperty.forEach((property) => {
-						body[property.field] = property.value;
-					});
-
-					const docType = this.getNodeParameter('docType', i) as string;
-					const documentName = this.getNodeParameter('documentName', i) as string;
-
-					responseData = await erpNextApiRequest.call(
-						this,
-						'PUT',
-						`/api/resource/${docType}/${documentName}`,
-						body,
-					);
-					responseData = responseData.data;
 				}
+			} catch (error) {
+				if (this.continueOnFail()) {
+					returnData.push({ json: { error: error.message }, pairedItem: { item: i } });
+					continue;
+				}
+				throw error;
 			}
 
 			const executionData = this.helpers.constructExecutionMetaData(
@@ -287,6 +457,7 @@ export class ERPNext implements INodeType {
 			);
 			returnData.push(...executionData);
 		}
+
 		return [returnData];
 	}
 }

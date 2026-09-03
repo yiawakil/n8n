@@ -3,7 +3,7 @@ import sortBy from 'lodash/sortBy';
 import uniqBy from 'lodash/uniqBy';
 
 export type DocumentProperties = {
-	customProperty: Array<{ field: string; value: string }>;
+	customProperty?: Array<{ field: string; value: string }>;
 };
 
 type DocFields = Array<{ name: string; value: string }>;
@@ -14,7 +14,7 @@ const uniqueByName = (docFields: DocFields) => uniqBy(docFields, (o) => o.name);
 
 export const processNames = flow(ensureName, sortByName, uniqueByName);
 
-export const toSQL = (operator: string) => {
+export const toSQL = (operator: string): string => {
 	const operators: { [key: string]: string } = {
 		is: '=',
 		isNot: '!=',
@@ -22,7 +22,11 @@ export const toSQL = (operator: string) => {
 		less: '<',
 		equalsGreater: '>=',
 		equalsLess: '<=',
+		like: 'like',
+		notLike: 'not like',
+		in: 'in',
+		notIn: 'not in',
 	};
 
-	return operators[operator];
+	return operators[operator] || '=';
 };
