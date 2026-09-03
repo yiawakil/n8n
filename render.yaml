@@ -3,12 +3,8 @@ services:
     name: n8n-erpnext
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter # Starter plan includes persistent disk support; can be changed to 'free' if using external PostgreSQL
+    plan: free # Free tier works seamlessly because Neon PostgreSQL persists all data
     region: oregon
-    disk:
-      name: n8n-storage
-      mountPath: /home/node/.n8n
-      sizeGB: 1
     envVars:
       - key: PORT
         value: 5678
@@ -17,7 +13,24 @@ services:
       - key: N8N_PROTOCOL
         value: https
       - key: WEBHOOK_URL
-        sync: false # Fill in Render with your generated URL, e.g., https://n8n-erpnext.onrender.com/
+        sync: false # Set to your public Render URL, e.g., https://n8n-erpnext.onrender.com/
+      - key: NODE_ENV
+        value: production
+
+      # --- Neon PostgreSQL Database Configuration ---
+      - key: DB_TYPE
+        value: postgresdb
+      - key: DB_POSTGRESDB_CONNECTION_STRING
+        sync: false # Paste your Neon connection string (e.g. postgresql://user:pass@ep-xyz.neon.tech/neondb?sslmode=require)
+      - key: DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED
+        value: "false"
+
+      # --- Critical for Stateless Deployment: Encryption Key ---
+      # Set this to any fixed random 32+ character string so n8n can always decrypt your saved credentials
+      - key: N8N_ENCRYPTION_KEY
+        sync: false
+
+      # --- Optimizations & Pruning ---
       - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
         value: "true"
       - key: EXECUTIONS_DATA_PRUNE
@@ -27,8 +40,6 @@ services:
       - key: EXECUTIONS_DATA_PRUNE_MAX_COUNT
         value: "10000"
       - key: N8N_DEFAULT_BINARY_DATA_MODE
-        value: filesystem
+        value: default
       - key: N8N_PAYLOAD_SIZE_MAX
         value: "64"
-      - key: NODE_ENV
-        value: production
