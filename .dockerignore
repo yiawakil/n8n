@@ -39,3 +39,10 @@
 !packages/@n8n/typescript-config
 !packages/@n8n/typescript-config/**
 
+# === Custom ERPNext Node and Deployment Files ===
+!Dockerfile
+!render.yaml
+!packages/nodes-base/nodes/ERPNext
+!packages/nodes-base/nodes/ERPNext/**
+!packages/nodes-base/credentials/ERPNextApi.credentials.ts
+

@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: n8n-erpnext
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # Starter plan includes persistent disk support; can be changed to 'free' if using external PostgreSQL
+    region: oregon
+    disk:
+      name: n8n-storage
+      mountPath: /home/node/.n8n
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 5678
+      - key: N8N_PORT
+        value: 5678
+      - key: N8N_PROTOCOL
+        value: https
+      - key: WEBHOOK_URL
+        sync: false # Fill in Render with your generated URL, e.g., https://n8n-erpnext.onrender.com/
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: "true"
+      - key: EXECUTIONS_DATA_PRUNE
+        value: "true"
+      - key: EXECUTIONS_DATA_MAX_AGE
+        value: "168"
+      - key: EXECUTIONS_DATA_PRUNE_MAX_COUNT
+        value: "10000"
+      - key: N8N_DEFAULT_BINARY_DATA_MODE
+        value: filesystem
+      - key: N8N_PAYLOAD_SIZE_MAX
+        value: "64"
+      - key: NODE_ENV
+        value: production
