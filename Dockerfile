@@ -41,6 +41,10 @@ USER root
 COPY --from=builder /app/dist/nodes/ERPNext/ /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/ERPNext/
 COPY --from=builder /app/dist/credentials/ /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/credentials/
 
+# Copy entrypoint script that parses Neon connection string
+COPY entrypoint-neon.sh /entrypoint-neon.sh
+RUN chmod +x /entrypoint-neon.sh
+
 # Set up permissions
 RUN chown -R node:node /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/ERPNext \
                        /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/credentials/ERPNextApi.credentials.js \
@@ -53,4 +57,5 @@ ENV N8N_PORT=5678
 ENV NODE_ENV=production
 
 EXPOSE 5678
+ENTRYPOINT ["tini", "--", "/entrypoint-neon.sh"]
 CMD ["start"]

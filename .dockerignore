@@ -42,6 +42,7 @@
 # === Custom ERPNext Node and Deployment Files ===
 !Dockerfile
 !render.yaml
+!entrypoint-neon.sh
 !packages/nodes-base/nodes/ERPNext
 !packages/nodes-base/nodes/ERPNext/**
 !packages/nodes-base/credentials/ERPNextApi.credentials.ts
